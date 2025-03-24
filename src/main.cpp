@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <iostream>
 #include "pico/stdlib.h"
 
 #include "config.h"
@@ -16,6 +17,13 @@
 static PicoHal myHal(SPI_PORT, PIN_MISO, PIN_MOSI, PIN_SCK);
 // LoRa radio object
 static SX1262 LoRaModule = SX1262(new Module( &myHal, PIN_CS, PIN_DIO1, PIN_LORA_RST, PIN_BUSY));
+// true when packet received
+volatile bool receivedFlag = false;
+
+void setrxFlag() {
+    // we got a packet, set the flag
+    receivedFlag = true;
+}
 
 
 int main()
@@ -25,10 +33,13 @@ int main()
     // waiting for serial monitor
     sleep_ms(5000);
 
+    /* apparantly the wifi init causes a hard assert failure 
+    whenever it's enabled and DIO1 is set to the Lora's interrupt
+
     // Initialise the Wi-Fi chip
     if (cyw43_arch_init()) {
         printf("Wi-Fi init failed\n");
-    }
+    }*/
 
     // starting LoRa module
     printf("[SX1262] Initializing ...\n");
@@ -89,78 +100,95 @@ int main()
         printf("[SX1262] Failed to enable RX boosted gain mode! \n"); 
     }
 
-    uint8_t lora_rxbuffer[RADIOLIB_SX126X_MAX_PACKET_LENGTH];
-    lora_t* rx_packet_no_gps; // pointer to a lora_t packet
-    lora_t_with_gps* rx_packet_gps; // pointer to gps packet
+    LoRaModule.setPacketReceivedAction(setrxFlag);
 
-    printf("[SX1262] Starting Receive loop. \n");
+    // start listening for LoRa packets
+    printf ("[SX1262] Starting to listen ... ");
+    LoRaState = LoRaModule.startReceive();
+    if (LoRaState == RADIOLIB_ERR_NONE) {
+        printf("success!");
+        } 
+    
+    else {
+        printf("failed, code %d", LoRaState);
+        while (true) { sleep_ms(1000); }
+    }
+
+    uint8_t lora_rxbuffer[RADIOLIB_SX126X_MAX_PACKET_LENGTH] = {};
+    volatile lora_t* rx_packet_no_gps = {}; // pointer to a lora_t packet
+    volatile lora_t_with_gps* rx_packet_gps = {}; // pointer to gps packet
+
+    printf("\n[SX1262] Starting Receive loop. \n");
 
     // receive loop
     while (true) {
 
-        // blocking receive
-        LoRaState = LoRaModule.receive(lora_rxbuffer, 0);
+        if (receivedFlag) {  // if lora packet was received
 
-        // if lora packet was received
-        if (LoRaState == RADIOLIB_ERR_NONE) {
-            switch (lora_rxbuffer[0]) { // check lora packet id
+            LoRaModule.readData(lora_rxbuffer,0);
 
-            case PTYPE_LORA_NO_GPS:     // no gps packet
+            //printf("Packet received. RSSI: %.1f dBm. SNR: %.1f dB.\n", LoRaModule.getRSSI(), LoRaModule.getSNR());
 
-            // casting rx_buffer as a lora_t packet
-            rx_packet_no_gps = (lora_t*)lora_rxbuffer;
+            if (LoRaState == RADIOLIB_ERR_NONE) {
+                switch (lora_rxbuffer[0]) { // check lora packet id
 
-            printf("Non GPS packet received. Capsule ID: %d. Packet time: %d. \n", rx_packet_no_gps->id, rx_packet_no_gps->t);
-            printf("IMU Data: Accel X: %d, Accel Y: %d, Accel Z: %d, Ang Vel X: %d, Ang Vel Y: %d, Ang Vel Z: %d",
-            rx_packet_no_gps->imu_data.accelx,
-            rx_packet_no_gps->imu_data.accely,
-            rx_packet_no_gps->imu_data.accelz,
-            rx_packet_no_gps->imu_data.angvelx,
-            rx_packet_no_gps->imu_data.angvely,
-            rx_packet_no_gps->imu_data.angvelz);
+                case PTYPE_LORA_NO_GPS:     // no gps packet
 
-            printf("BME280 Data: Temperature: %d, Humidity: %d, Pressure: %d",
-            rx_packet_no_gps->accel_data.accelx,
-            rx_packet_no_gps->accel_data.accely,
-            rx_packet_no_gps->accel_data.accelz);
+                // casting rx_buffer as a lora_t packet
+                rx_packet_no_gps = (lora_t*)lora_rxbuffer;
 
-            break;
+                printf("Non GPS packet received. Capsule ID: %d. Packet time: %d. \n", rx_packet_no_gps->id, rx_packet_no_gps->t);
+                /*printf("IMU Data: Accel X: %d, Accel Y: %d, Accel Z: %d, Ang Vel X: %d, Ang Vel Y: %d, Ang Vel Z: %d\n",
+                rx_packet_no_gps->imu_data.accelx,
+                rx_packet_no_gps->imu_data.accely,
+                rx_packet_no_gps->imu_data.accelz,
+                rx_packet_no_gps->imu_data.angvelx,
+                rx_packet_no_gps->imu_data.angvely,
+                rx_packet_no_gps->imu_data.angvelz);
 
-            case PTYPE_LORA_HAS_GPS:     // gps packet
-            // casting rx_buffer as a gps packet
-            rx_packet_gps = (lora_t_with_gps*)lora_rxbuffer;
+                printf("BME280 Data: Temperature: %d, Humidity: %d, Pressure: %d\n",
+                rx_packet_no_gps->accel_data.accelx,
+                rx_packet_no_gps->accel_data.accely,
+                rx_packet_no_gps->accel_data.accelz);*/
+                
+                break;
 
-            printf("Non GPS packet received. Capsule ID: %d. Packet time: %d. \n", rx_packet_gps->sensor_data.id, rx_packet_gps->sensor_data.t);
-            printf("IMU Data: Accel X: %d, Accel Y: %d, Accel Z: %d, Ang Vel X: %d, Ang Vel Y: %d, Ang Vel Z: %d",
-            rx_packet_gps->sensor_data.imu_data.accelx,
-            rx_packet_gps->sensor_data.imu_data.accely,
-            rx_packet_gps->sensor_data.imu_data.accelz,
-            rx_packet_gps->sensor_data.imu_data.angvelx,
-            rx_packet_gps->sensor_data.imu_data.angvely,
-            rx_packet_gps->sensor_data.imu_data.angvelz);
+                case PTYPE_LORA_HAS_GPS:     // gps packet
+                // casting rx_buffer as a gps packet
+                rx_packet_gps = (lora_t_with_gps*)lora_rxbuffer;
 
-            printf("BME280 Data: Temperature: %d, Humidity: %d, Pressure: %d",
-            rx_packet_gps->sensor_data.accel_data.accelx,
-            rx_packet_gps->sensor_data.accel_data.accely,
-            rx_packet_gps->sensor_data.accel_data.accelz);
+                printf("GPS packet received. Capsule ID: %d. Packet time: %d. \n", rx_packet_gps->sensor_data.id, rx_packet_gps->sensor_data.t);
+                /*printf("IMU Data: Accel X: %d, Accel Y: %d, Accel Z: %d, Ang Vel X: %d, Ang Vel Y: %d, Ang Vel Z: %d",
+                rx_packet_gps->sensor_data.imu_data.accelx,
+                rx_packet_gps->sensor_data.imu_data.accely,
+                rx_packet_gps->sensor_data.imu_data.accelz,
+                rx_packet_gps->sensor_data.imu_data.angvelx,
+                rx_packet_gps->sensor_data.imu_data.angvely,
+                rx_packet_gps->sensor_data.imu_data.angvelz);
 
-            break;
+                printf("BME280 Data: Temperature: %d, Humidity: %d, Pressure: %d",
+                rx_packet_gps->sensor_data.accel_data.accelx,
+                rx_packet_gps->sensor_data.accel_data.accely,
+                rx_packet_gps->sensor_data.accel_data.accelz);*/
 
-            default: // not either type of packet
-            printf("Non mesh packet received. Discarding. \n");
-            break;
+                break;
 
+                default: // not either type of packet
+                printf("Non mesh packet received. Discarding. \n");
+                break;
+                }
             }
-        }
-        
-        // if receive timed out
-        else if (LoRaState == RADIOLIB_ERR_RX_TIMEOUT) {
-            // nothing
+
+            // if some other error
+            else {
+                printf("[SX1262] Receive failure. Status code: %d \n", LoRaState);
+            }
+
+            receivedFlag = false; // reset flag
         }
 
-        // if some other error
-        else {
-            printf("[SX1262] Receive failure. Status code: %d \n", LoRaState);
+        else { 
+            sleep_ms(1);
         }
     }
 }
